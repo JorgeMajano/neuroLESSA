@@ -1,10 +1,6 @@
-\<div align="center"\>
-
 # 🤖 neuroLESSA
 
-[cite\_start]**Inteligencia Artificial para la Interpretación en tiempo real de la Lengua de Señas Salvadoreña (LESSA) a texto y voz.** [cite: 375, 386]
-
-\</div\>
+[cite\_start]**Inteligencia Artificial para la Interpretación en tiempo real de la Lengua de Señas Salvadoreña (LESSA) a texto y voz.**
 
 -----
 
@@ -87,6 +83,6 @@ La aplicación se iniciará, activará tu cámara principal y abrirá la interfa
 
 ### 🧑‍💻 Autores
 
-  * [cite\_start]**Jorge Ernesto Majano Santos** [cite: 377]
-  * [cite\_start]**Richard Jonathan Quinteros Mendoza** [cite: 378]
+  * [cite\_start]**Jorge Ernesto Majano Santos**
+  * [cite\_start]**Richard Jonathan Quinteros Mendoza**
 
