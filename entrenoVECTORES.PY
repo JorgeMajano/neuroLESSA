@@ -7,12 +7,12 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import seaborn as sns
 from sklearn.model_selection import train_test_split
-from sklearn.preprocessing import LabelEncoder
 from sklearn.metrics import classification_report, confusion_matrix
-from tensorflow.keras.models import Sequential
+from tensorflow.keras.models import Sequential, load_model
 from tensorflow.keras.layers import GRU, Dense, Masking, Dropout, Input
 from tensorflow.keras.utils import to_categorical
 from tensorflow.keras.callbacks import EarlyStopping, ReduceLROnPlateau, ModelCheckpoint
+from tensorflow.keras import mixed_precision # Importación para precisión mixta
 # --- 1. FUNCIONES DE AYUDA Y PREPROCESAMIENTO ---
 def augment_data(sequence, noise_level=0.005):
     """Aplica ruido gaussiano a una secuencia para aumentar los datos."""
@@ -46,7 +46,6 @@ def data_generator(filepaths, actions, frames_per_seq, expected_dim, is_training
             frames_data.append(res)
         if not frames_data:
             continue
-            
         sequence = np.array(frames_data)
         # --- Normalización y Relleno ---
         if len(sequence) < frames_per_seq:
@@ -64,6 +63,7 @@ def data_generator(filepaths, actions, frames_per_seq, expected_dim, is_training
         # --- Aumento de Datos (Solo para entrenamiento) ---
         if is_training:
             sequence = augment_data(sequence)
+            
         # Usar to_categorical para la etiqueta
         yield sequence.astype(np.float32), to_categorical(label_idx, num_classes=num_classes).astype(np.float32)
 def build_model(num_classes, frames_per_seq, expected_dim):
@@ -106,7 +106,9 @@ def plot_history(history):
     ax2.legend()
     ax2.set_title('Loss')
     plt.savefig('training_history.png')
-    plt.show()
+    print("\n[INFO] Gráfico de historial guardado en 'training_history.png'")
+    # plt.show() # <-- CORRECCIÓN: Eliminado para evitar el RuntimeError de Tkinter
+    plt.close(fig) # <-- Buena práctica: Cierra la figura para liberar memoria
 def evaluate_model(model, test_dataset, actions):
     """Muestra métricas de evaluación detalladas."""
     print("\n[INFO] Evaluando modelo...")
@@ -119,16 +121,30 @@ def evaluate_model(model, test_dataset, actions):
     print(classification_report(y_true_labels, y_pred_labels, target_names=actions))
     print("\n--- Matriz de Confusión ---")
     cm = confusion_matrix(y_true_labels, y_pred_labels)
-    plt.figure(figsize=(10, 8))
+    fig = plt.figure(figsize=(10, 8)) # <-- Captura la figura en una variable
     sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', xticklabels=actions, yticklabels=actions)
     plt.title('Matriz de Confusión')
     plt.ylabel('Etiqueta Real')
     plt.xlabel('Etiqueta Predicha')
     plt.savefig('confusion_matrix.png')
-    plt.show()
+    print("[INFO] Matriz de confusión guardada en 'confusion_matrix.png'")
+    # plt.show() # <-- CORRECCIÓN: Eliminado para evitar el RuntimeError de Tkinter
+    plt.close(fig) # <-- Buena práctica: Cierra la figura para liberar memoria
 # --- 2. SCRIPT PRINCIPAL ---
 def main(args):
-    # --- Configuración ---
+    # 1. Asegura que las optimizaciones de OneDNN estén habilitadas
+    os.environ["TF_ENABLE_ONEDNN_OPTS"] = "1"
+    # 2. Activa el compilador XLA (Accelerated Linear Algebra) para fusionar operaciones
+    tf.config.optimizer.set_jit(True)
+    # 3. Configuración de hilos para tu CPU i7-1185G7 (4 núcleos físicos / 8 hilos lógicos)
+    # Usa los núcleos físicos para operaciones internas (cálculos matemáticos)
+    tf.config.threading.set_intra_op_parallelism_threads(4) 
+    # Usa los hilos lógicos para operaciones entre nodos del grafo
+    tf.config.threading.set_inter_op_parallelism_threads(8)
+    # 4. 🚀 Activa la precisión mixta para acelerar cálculos y reducir memoria
+    # bfloat16 es ideal para CPUs modernas con soporte AVX
+    mixed_precision.set_global_policy('mixed_bfloat16')
+    print("\n[INFO] Optimizaciones de CPU (OneDNN, XLA, Precisión Mixta) activadas.")
     DATA_PATH = Path(args.data_path)
     MODEL_FOLDER = Path('modelo_entrenado')
     MODEL_FOLDER.mkdir(exist_ok=True)
@@ -143,6 +159,9 @@ def main(args):
     try:
         actions = sorted([d.name for d in DATA_PATH.iterdir() if d.is_dir()])
         num_classes = len(actions)
+        if num_classes == 0:
+            print(f"[ERROR] No se encontraron carpetas de gestos en '{DATA_PATH}'.")
+            return
         print(f"[INFO] Gestos encontrados ({num_classes}): {actions}")
     except FileNotFoundError:
         print(f"[ERROR] La carpeta '{DATA_PATH}' no fue encontrada.")
@@ -151,8 +170,11 @@ def main(args):
     np.save(MODEL_FOLDER / "etiquetas.npy", actions)
     # Obtener rutas de archivos y dividirlas
     all_filepaths = load_sequences_and_labels(DATA_PATH, actions)
+    if not all_filepaths:
+        print(f"[ERROR] No se encontraron archivos de secuencias .npy en las carpetas de gestos.")
+        return
+        
     train_files, test_files = train_test_split(all_filepaths, test_size=0.20, random_state=42, stratify=[label for path, label in all_filepaths])
-    
     print(f"\n[INFO] Total de muestras: {len(all_filepaths)}")
     print(f"Muestras de entrenamiento: {len(train_files)}")
     print(f"Muestras de prueba: {len(test_files)}")
@@ -176,9 +198,9 @@ def main(args):
     # Callbacks para un entrenamiento inteligente
     early_stopping = EarlyStopping(monitor='val_loss', patience=25, restore_best_weights=True, verbose=1)
     reduce_lr = ReduceLROnPlateau(monitor='val_loss', factor=0.2, patience=10, min_lr=0.00001, verbose=1)
-    # Guardar solo el mejor modelo
+    model_checkpoint_path = str(MODEL_FOLDER / "modelo_gestos.keras")
     model_checkpoint = ModelCheckpoint(
-        filepath=str(MODEL_FOLDER / "modelo_gestos.h5"),
+        filepath=model_checkpoint_path,
         monitor='val_accuracy',
         save_best_only=True,
         mode='max',
@@ -193,11 +215,11 @@ def main(args):
     )
     # --- Evaluación y Guardado ---
     print("\n[INFO] Entrenamiento completado.")
-    # Cargar el mejor modelo guardado por ModelCheckpoint para la evaluación final
-    model.load_weights(str(MODEL_FOLDER / "modelo_gestos.h5"))
+    print(f"\n[INFO] Cargando el mejor modelo desde: {model_checkpoint_path}")
+    # Asegurarse de que el modelo cargado compile con las optimizaciones
+    best_model = load_model(model_checkpoint_path)
     plot_history(history)
-    evaluate_model(model, test_ds, actions)
-    # El modelo ya está guardado, pero se puede guardar en el formato SavedModel
+    evaluate_model(best_model, test_ds, actions)
     print(f"\n[✅] Modelo guardado en: '{MODEL_FOLDER}'")
     print("\n¡Proceso finalizado con éxito!")
 if __name__ == '__main__':
